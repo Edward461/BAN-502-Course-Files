@@ -1,0 +1,636 @@
+---
+title: Product Part2 
+author: Edward Thompson
+output: word_document
+---
+
+
+Packages  
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(GGally)
+library(gridExtra)
+library(car) 
+library(glmnet)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+library(rmarkdown)
+library(caret)
+library(mice)
+library(VIM)
+library(ranger)
+library(randomForest)
+library(RColorBrewer)
+library(rpart)
+library(rattle)
+library(e1071)
+library(xgboost)
+library(usemodels)
+library(nnet) 
+library(readr)
+library(knitr)
+library(rmarkdown)
+```
+
+This imports the data set into the file. 
+```{r}
+product <- read_csv("train.csv")
+```
+
+This replaces the missing data with the average of that set of data.  
+```{r}
+product <- product %>%
+  mutate(across(where(is.numeric),
+                ~replace(., is.na(.), mean(., na.rm = TRUE))))
+```
+
+By doing this I am splitting the data into a training and testing sections. I am using 70% to go into the training set and the remaining are going into the testing set. I am making this split using the failure varible because that is what we are trying to predict for the products. 
+```{r}
+set.seed(123) 
+product_split = initial_split(product, prop = 0.7, strata = failure)
+product_train = training(product_split) 
+product_test = testing(product_split)
+```
+
+This set up the my xboost recipe it gave me the layout for the code. It also told me what seed would be best for me to use. 
+```{r}
+#use_xgboost(failure ~., product)
+```
+This code set up the folds I would use for the model that is below. 
+```{r}
+product_folds2 <-
+  vfold_cv(product_train,
+           v = 10,
+           strata = failure)
+```
+
+All of the code below is how I made the model and tested it against both my test and training data. I was able to get a 79% accuracy in both training and testing. This one was supposed to be more accurate than the first model but it did not turn out that way even with me increasing specifcities. 
+```{r Project}
+start_time = Sys.time()
+
+xgboost_recipe2 <-
+  recipe(failure ~ ., data = product_train) %>%
+  step_zv(all_predictors()) %>%                 
+  step_novel(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%                 
+  step_normalize(all_numeric_predictors())
+
+xgboost_spec2 <-
+  boost_tree(
+    trees = tune(),
+    tree_depth = tune(),
+    min_n = tune(),
+    learn_rate = tune(),
+    loss_reduction = tune(),
+    sample_size = tune()
+  ) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+xgboost_workflow2 <-
+  workflow() %>%
+  add_recipe(xgboost_recipe2) %>%
+  add_model(xgboost_spec2)
+
+
+xgb_grid2 <-
+  grid_space_filling(
+    trees(range = c(300L, 1000L)),
+    tree_depth(range = c(2L, 10L)),
+    min_n(range = c(2L, 20L)),
+    learn_rate(range = c(-3, -1)),   
+    loss_reduction(),
+    sample_prop(range = c(0.5, 1.0)),
+    size = 50
+  )
+
+
+set.seed(96401)
+
+xgboost_tune2 <-
+  tune_grid(
+    xgboost_workflow2,          
+    resamples = product_folds2,
+    grid = xgb_grid2,           
+    metrics = metric_set(accuracy, roc_auc)
+  )
+
+end_time = Sys.time()
+end_time - start_time
+```
+
+This selects the best variable that can be selected for the model and gets it ready to be trained against other datasets. 
+```{r}
+best_xgb2 <- select_best(xgboost_tune2, metric = "roc_auc")
+
+final_xgb2 <- finalize_workflow(
+  xgboost_workflow2,
+  best_xgb2
+)
+
+final_xgb2
+```
+```{r}
+final_xgb_fit2 <- fit(
+  final_xgb2,
+  data = product_train
+)
+```
+
+
+This code starts to make the predictions about the training dataset and shows the first few rows of the predictors. 
+```{r}
+trainpredxgb2 <- predict(final_xgb_fit2, new_data = product_train)
+head(trainpredxgb2)
+```
+```{r}
+product_train$failure <- factor(product_train$failure,
+                                levels = c("No", "Yes"))
+
+trainpredxgb2$.pred_class <- factor(
+  trainpredxgb2$.pred_class,
+  levels = levels(product_train$failure)
+)
+```
+
+This the confusion matrix that shows the accuracy compared to my training dataset that I made with the split. 
+```{r}
+confusionMatrix(
+  data = trainpredxgb2$.pred_class,
+  reference = product_train$failure,
+  positive = "Yes"
+)
+```
+This gets the data ready to be to be tested against my test data. 
+```{r}
+testpredxgb <- predict(final_xgb_fit2, new_data = product_test)
+```
+
+```{r}
+product_test$failure <- factor(product_test$failure,
+                                levels = c("No", "Yes"))
+
+testpredxgb$.pred_class <- factor(
+  testpredxgb$.pred_class,
+  levels = levels(product_test$failure)
+)
+```
+
+This is the confusion matrix that shows the accuracy of the data against my test data. 
+```{r}
+confusionMatrix(
+  data = testpredxgb$.pred_class,
+  reference = product_test$failure,
+  positive = "Yes"
+)
+```
+This data imports the test data that we need to compare for the final part of the project. 
+```{r}
+product_test2 <- read_csv("test.csv")
+```
+I used this to clean the new test data. 
+```{r}
+product_test2 <- product_test2 %>%
+  mutate(across(where(is.numeric),
+                ~replace(., is.na(.), mean(., na.rm = TRUE))))
+```
+
+
+
+This changes the factor variable from a character to factor
+```{r}
+product_train <- product_train %>%
+  mutate(failure = as.factor(failure))
+product_test <- product_test %>%
+  mutate(failure = as.factor(failure))
+```
+
+This is my second attempt at predicting the failure variable using a neural network. This neural network focuses on the predictor variables that I found in my earlier research of my project. Those variables were loading and measurement_17. 
+```{r}
+set.seed(123)
+folds = vfold_cv(product_train, v = 5)
+```
+This code below is the neural network that works based off of the two variables of loading and measurement_17.
+```{r}
+
+start_time = Sys.time() 
+start_time <- Sys.time()
+
+neural_grid <- grid_regular(
+  hidden_units(range = c(1, 10)),
+  penalty(range = c(-10, -1)),
+  epochs(range = c(10, 100)),
+  levels = 10
+)
+
+
+product_train <- product_train %>%
+  mutate(failure = as.factor(failure))
+
+
+nn_recipe <-
+  recipe(failure ~ loading + measurement_17, data = product_train) %>%
+  step_normalize(all_numeric_predictors())
+
+
+nn_model <-
+  mlp(
+    hidden_units = tune(),
+    penalty = tune(),
+    epochs = tune()
+  ) %>%
+  set_mode("classification") %>%
+  set_engine("nnet", trace = FALSE)
+
+
+nn_workflow <-
+  workflow() %>%
+  add_recipe(nn_recipe) %>%
+  add_model(nn_model)
+
+
+set.seed(123)
+
+nn_tune <-
+  tune_grid(
+    nn_workflow,
+    resamples = folds,
+    grid = neural_grid,
+    metrics = metric_set(accuracy, roc_auc)
+  )
+
+end_time <- Sys.time()
+end_time - start_time
+
+```
+
+
+```{r}
+best_nn <- select_best(
+  nn_tune,
+  metric = "roc_auc"
+)
+
+final_nn = finalize_workflow(
+  nn_workflow,
+  best_nn
+)
+
+final_nn
+```
+```{r}
+collect_metrics(nn_tune)
+```
+
+
+```{r}
+best_nn <- select_best(
+  nn_tune,
+  metric = "accuracy"
+)
+
+final_nn <- finalize_workflow(
+  nn_workflow,
+  best_nn
+)
+
+final_nn
+```
+
+```{r}
+final_nn_fit <- fit(
+  final_nn,
+  data = product_train
+)
+```
+
+
+```{r}
+trainproduct2 = predict(final_nn_fit, product_train)
+head(trainproduct2)
+```
+This model gave us the same accuracy as our other model but gave us a diffrent amount of predictions. This means that this model may be more accurate in some ways while being less accurate in others. 
+```{r}
+confusionMatrix(trainproduct2$.pred_class, 
+                product_train$failure, 
+                positive = "Yes")
+```
+
+
+```{r}
+testproduct2 = predict(final_nn_fit, product_test)
+head(testproduct2)
+```
+
+
+```{r}
+nn_predictions <- predict(
+  final_nn_fit,
+  new_data = product_test2
+)
+nn_probabilities <- predict(
+  final_nn_fit,
+  new_data = product_test2,
+  type = "prob"
+)
+```
+
+```{r}
+submission1 <- tibble(
+  id = product_test2$id,
+  failure = nn_predictions$.pred_class
+)
+write.csv(
+  submission1,
+  "submission1.csv",
+  row.names = FALSE
+)
+```
+
+
+Model number three I am going to use a random forest to try to predict the model.This model used all the data to try to find the best solution. 
+```{r}
+start_time = Sys.time() 
+start_time <- Sys.time()
+
+set.seed(1234)
+
+# Make sure response is a factor
+product_train <- product_train %>%
+  mutate(failure = factor(failure))
+
+# Recipe
+rf_recipe <-
+  recipe(failure ~ ., data = product_train) %>%
+  step_unknown(all_nominal_predictors()) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_zv(all_predictors())
+
+# Model
+rf_model <-
+  rand_forest(
+    trees = 1000,
+    mtry = tune(),
+    min_n = tune()
+  ) %>%
+  set_engine("ranger",
+             importance = "permutation") %>%
+  set_mode("classification")
+
+# Workflow
+rf_workflow <-
+  workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(rf_model)
+
+# 5-fold CV
+set.seed(1234)
+
+folds <-
+  vfold_cv(
+    product_train,
+    v = 5,
+    strata = failure
+  )
+
+# Tune
+rf_tune <-
+  tune_grid(
+    rf_workflow,
+    resamples = folds,
+    grid = 25,
+    metrics = metric_set(accuracy, roc_auc)
+  )
+
+end_time <- Sys.time()
+end_time - start_time
+
+```
+
+
+
+```{r}
+best_rf <-
+  select_best(
+    rf_tune,
+    metric = "roc_auc"
+  )
+```
+
+```{r}
+final_rf <-
+  finalize_workflow(
+    rf_workflow,
+    best_rf
+  )
+
+final_rf_fit <-
+  fit(
+    final_rf,
+    data = product_train
+  )
+```
+
+```{r}
+rf_predictions <-
+  predict(
+    final_rf_fit,
+    new_data = product_test
+)
+```
+
+```{r}
+rf_probabilities <- predict(
+  final_rf_fit,
+  new_data = product_test,
+  type = "prob"
+)
+rf_results <- bind_cols(
+  product_test,
+  rf_predictions,
+  rf_probabilities
+)
+rf_results <- rf_results %>%
+  mutate(
+    failure = factor(failure, levels = c("No", "Yes")),
+    .pred_class = factor(.pred_class, levels = c("No", "Yes"))
+  )
+```
+
+```{r}
+confusionMatrix(
+  data = rf_results$.pred_class,
+  reference = rf_results$failure,
+  positive = "Yes"
+)
+```
+
+```{r}
+submission <-
+  tibble(
+    failure = rf_predictions$.pred_class
+  )
+
+write.csv(
+  submission,
+  "submission.csv",
+  row.names = FALSE
+)
+```
+
+Because the second method was the most sucessfull I am doing this code below to try to improve on the accuracy of the model. I did this by increasing the amount of variables in the dataset but it still did not improve the accuracy. 
+```{r}
+start_time <- Sys.time()
+
+# Make sure failure is a factor
+product_train2 <- product_train %>%
+  mutate(failure = factor(failure))
+
+# 10-fold cross validation
+set.seed(123)
+
+folds3 <- vfold_cv(
+  product_train,
+  v = 10,
+  strata = failure
+)
+
+# Recipe
+nn_recipe2 <-
+  recipe(failure ~ loading + measurement_17 + measurement_0 + measurement_1 + measurement_2 + measurement_3+ product_code + attribute_0 + attribute_1, data = product_train) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+# Model
+nn_model2 <-
+  mlp(
+    hidden_units = tune(),
+    penalty = tune(),
+    epochs = tune()
+  ) %>%
+  set_mode("classification") %>%
+  set_engine("nnet", trace = FALSE)
+
+# Workflow
+nn_workflow2 <-
+  workflow() %>%
+  add_recipe(nn_recipe2) %>%
+  add_model(nn_model2)
+
+# Hyperparameter grid
+nn_grid2 <-
+  grid_space_filling(
+    hidden_units(range = c(5L, 40L)),
+    penalty(),
+    epochs(range = c(50L, 300L)),
+    size = 50
+  )
+
+# Tune the model
+set.seed(123)
+
+nn_tune2 <-
+  tune_grid(
+    nn_workflow2,
+    resamples = folds3,
+    grid = nn_grid2,
+    metrics = metric_set(accuracy, roc_auc)
+  )
+
+end_time <- Sys.time()
+end_time - start_time
+
+```
+
+```{r}
+best_nn2 <- select_best(
+  nn_tune2,
+  metric = "roc_auc"
+)
+
+final_nn2 = finalize_workflow(
+  nn_workflow2,
+  best_nn2
+)
+
+final_nn2
+```
+```{r}
+final_nn_fit2 <- fit(
+  final_nn2,
+  data = product_train
+)
+nn_predictions2 <-
+  predict(
+    final_nn_fit2,
+    new_data = product_test
+  )
+nn_probabilities2 <-
+  predict(
+    final_nn_fit2,
+    new_data = product_test,
+    type = "prob"
+  )
+nn_results2 <-
+  bind_cols(
+    product_test,
+    nn_predictions2,
+    nn_probabilities2
+  )
+
+```
+
+
+```{r}
+trainproduct3 = predict(final_nn_fit2, product_train2)
+head(trainproduct3)
+```
+
+```{r}
+nn_results2 <- nn_results2 %>%
+  mutate(
+    .pred_class = factor(.pred_class),
+    failure = factor(failure)
+  )
+```
+
+
+```{r}
+conf_mat(
+  nn_results2,
+  truth = failure,
+  estimate = .pred_class
+)
+```
+```{r}
+test_predictions <-
+  predict(
+    final_nn_fit2,
+    new_data = product_test2
+  )
+```
+
+
+```{r}
+submission <-
+  tibble(
+    id = product_test2$id,
+    failure = test_predictions$.pred_class
+  )
+
+write.csv(
+  submission,
+  "submission2.csv",
+  row.names = FALSE
+)
+```
+
+
+

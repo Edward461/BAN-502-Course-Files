@@ -1,0 +1,175 @@
+## Classification Trees
+
+```{r}
+options(tidyverse.quiet = TRUE)
+library(titanic)
+library(tidyverse)
+library(tidymodels)
+library(mice) #package for imputation
+library(VIM) #visualizing missingness
+library(rpart) #for classification trees
+library(rpart.plot) #for plotting trees
+library(RColorBrewer) #better visualization of classification trees
+library(rattle) #better visualization of classification trees
+```
+
+Read in dataset   
+```{r}
+heart <- read_csv("heart_disease-1.csv")
+```
+
+Structure and summary
+```{r}
+str(heart)
+summary(heart)
+```
+
+Factor conversion and recoding (Always do this prior to splitting)  
+```{r}
+heart <- heart %>%
+  mutate(
+    sex = factor(Sex),
+    ChestPainType = factor(ChestPainType),
+    RestingECG = factor(RestingECG),
+    ExerciseAngina = factor(ExerciseAngina),
+    ST_Slope = factor(ST_Slope),
+    HeartDisease = factor(HeartDisease,
+                          levels = c(0, 1),
+                          labels = c("No", "Yes"))
+  )
+
+str(heart)
+```
+
+
+
+Splitting.  
+```{r}
+set.seed(12345)
+
+heart_split <- initial_split(
+  heart,
+  prop = 0.70,
+  strata = HeartDisease
+)
+
+heart_train <- training(heart_split)
+heart_test  <- testing(heart_split)
+
+nrow(heart_train)
+```
+
+
+
+```{r}
+tree_model <- rpart(
+  HeartDisease ~ .,
+  data = heart_train,
+  method = "class"
+)
+rpart.plot(tree_model)
+tree_model
+```
+Let's take a look at our tree (a few ways)  
+```{r}
+printcp(tree_model)
+```
+Look at the "rpart" complexity parameter "cp".    
+```{r}
+heart_recipe <-
+  recipe(HeartDisease ~ ., data = heart_train)
+tree_spec <-
+  decision_tree(
+    cost_complexity = tune()
+  ) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+tree_workflow <-
+  workflow() %>%
+  add_recipe(heart_recipe) %>%
+  add_model(tree_spec)
+set.seed(123)
+
+folds <- vfold_cv(
+  heart_train,
+  v = 5,
+  strata = HeartDisease
+)
+grid <- grid_regular(
+  cost_complexity(),
+  levels = 25
+)
+tree_results <-
+  tune_grid(
+    tree_workflow,
+    resamples = folds,
+    grid = grid,
+    metrics = metric_set(accuracy, roc_auc)
+  )
+collect_metrics(tree_results) %>%
+  filter(.metric == "accuracy") %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line() +
+  geom_point()
+collect_metrics(tree_results) %>%
+  filter(.metric == "roc_auc") %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line() +
+  geom_point()
+show_best(tree_results, metric = "accuracy")
+```
+```{r}
+best_cp <- select_best(tree_results, metric = "accuracy")
+best_cp
+final_workflow <-
+  finalize_workflow(
+    tree_workflow,
+    best_cp
+  )
+final_fit <-
+  fit(
+    final_workflow,
+    data = heart_train
+  )
+extract_fit_parsnip(final_fit) %>%
+  pluck("fit") %>%
+  rpart.plot()
+```
+```{r}
+train_predictions <-
+  predict(final_fit, heart_train) %>%
+  bind_cols(heart_train)
+
+accuracy(train_predictions,
+         truth = HeartDisease,
+         estimate = .pred_class)
+```
+
+```{r}
+sens(train_predictions,
+     truth = HeartDisease,
+     estimate = .pred_class)
+```
+
+```{r}
+test_predictions <-
+  predict(final_fit, heart_test) %>%
+  bind_cols(heart_test)
+
+accuracy(test_predictions,
+         truth = HeartDisease,
+         estimate = .pred_class)
+```
+```{r}
+collect_metrics(tree_results)
+```
+```{r}
+accuracy(train_predictions,
+        truth = HeartDisease,
+        estimate = .pred_class)
+```
+```{r}
+sens(train_predictions,
+     truth = HeartDisease,
+     estimate = .pred_class)
+```

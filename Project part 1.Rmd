@@ -1,0 +1,212 @@
+---
+title: Product Exploration
+author: Edward Thompson
+output: word_document
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(GGally)
+library(dplyr)
+library(knitr)
+library(rmarkdown)
+```
+
+Read in dataset
+
+```{r}
+product <- read_csv("train.csv")
+```
+
+Replacing missing values
+
+```{r}
+product <- product %>%
+  mutate(across(where(is.numeric),
+                ~replace(., is.na(.), mean(., na.rm = TRUE))))
+```
+
+Structure and summary
+
+```{r}
+str(product)
+summary(product)
+```
+
+```{r}
+product %>%
+  group_by(product_code) %>%
+  summarise(
+    Count = n(),
+    FailureRate = mean(failure == "Yes")
+  ) %>%
+  arrange(desc(FailureRate))
+```
+
+```{r}
+ggpairs(product)
+```
+
+```{r}
+ggpairs(
+  product %>%
+    select(failure, loading, starts_with("measurement_")),
+  aes(color = failure, alpha = 0.2),
+  lower = list(
+    continuous = wrap("points", size = 0.3)
+  ),
+  diag = list(
+    continuous = wrap("densityDiag")
+  )
+)
+```
+
+
+```{r}
+ggpairs(
+  product %>%
+    select(
+      failure,
+      loading,
+      measurement_17
+    ),
+  aes(color = failure, alpha = 0.5),
+  lower = list(continuous = wrap("points", size = 0.4))
+)
+``` 
+
+
+
+```{r}
+product2 <- product %>%
+  mutate(fail_num = ifelse(failure=="Yes",1,0))
+correlations <-
+product2 %>%
+  select(where(is.numeric)) %>%
+  cor(use="pairwise.complete.obs")
+
+correlations[,"fail_num"]
+sort(correlations[,"fail_num"])
+``` 
+
+Loading and Measurment 17 have the two  highest corrolations with the failure variable
+```{r}
+ggplot(product,
+       aes(failure,
+           loading,
+           fill=failure)) +
+  geom_violin()
+``` 
+```{r}
+ggplot(product,
+       aes(failure,
+           measurement_17,
+           fill=failure)) +
+  geom_violin()
+``` 
+
+
+```{r}
+ggplot(product,
+       aes(x = failure,
+           y = loading,
+           fill = failure)) +
+  geom_boxplot()
+``` 
+
+```{r}
+ggplot(product,
+       aes(x = failure,
+           y = measurement_17,
+           fill = failure)) +
+  geom_boxplot()
+``` 
+
+
+```{r}
+t.test(loading ~ failure,
+       data=product)
+``` 
+
+```{r}
+t.test(measurement_17 ~ failure,
+       data=product)
+``` 
+
+```{r}
+ggplot(product,
+       aes(x = loading,
+           fill = failure)) +
+  geom_density(alpha=.4)
+``` 
+
+```{r}
+ggplot(product,
+       aes(x = measurement_1,
+           fill = failure)) +
+  geom_density(alpha=.4)
+``` 
+
+```{r}
+GGally::ggpairs(
+  product,
+  columns = 1:8,
+  aes(color=failure)
+)
+``` 
+
+```{r}
+ggplot(product, aes(x = failure, y = loading, fill = failure)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.2, size = 1) +
+  labs(
+    title = "Loading by Failure Status",
+    x = "Failure",
+    y = "Loading"
+  ) +
+  theme_minimal()
+``` 
+
+```{r}
+ggplot(product, aes(x = failure, y = loading, color = failure)) +
+  geom_point(alpha = 0.3) +
+  labs(
+    title = "Loading vs. Failure",
+    x = "Failure",
+    y = "Loading"
+  ) +
+  theme_minimal()
+``` 
+
+```{r}
+product2 <- product %>%
+  mutate(failure_num = ifelse(failure == "Yes", 1, 0))
+
+ggplot(product2, aes(x = loading, y = failure_num)) +
+  geom_point() +
+  labs(
+    title = "Loading vs Failure",
+    x = "Loading",
+    y = "Failure (0 = No, 1 = Yes)"
+  ) +
+  theme_minimal()
+``` 
+
+```{r}
+ggplot(product,
+       aes(x = measurement_17,
+           fill = failure)) +
+  geom_density(alpha=.4)
+``` 
+
+```{r}
+ggplot(product,
+       aes(x = measurement_11,
+           fill = failure)) +
+  geom_density(alpha=.4)
+``` 
+
+
+
